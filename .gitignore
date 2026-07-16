@@ -1,0 +1,7 @@
+# Core components
+__pycache__/
+*.pyc
+logs/
+output/
+temp/
+cache/
